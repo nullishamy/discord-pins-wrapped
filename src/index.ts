@@ -28,6 +28,7 @@ const parser = new Args(opts)
   .arg(['--token'], a.string())
   .arg(['--channels'], a.string().array().default(DEFAULT_CHANNELS))
   .arg(['--user'], a.string().optional())
+  .arg(['--limit'], a.number().optional())
 
 export type Arguments = ExtractArgType<typeof parser>
 
@@ -51,7 +52,7 @@ async function handleChannel (id: string, args: Arguments): Promise<void> {
     const videos: FlaggedEmbed[] = []
     const text: FlaggedEmbed[] = []
 
-    for (const embed of embeds) {
+    for (const embed of embeds.slice(0, args.limit ?? embeds.length)) {
       if (embed.hasVideo) {
         videos.push(embed)
       } else {
@@ -59,7 +60,7 @@ async function handleChannel (id: string, args: Arguments): Promise<void> {
       }
     }
 
-    console.log('Filtered', videos.length, 'videos,', text.length, 'text posts out of', embeds.length, 'embeds')
+    console.log('Filtered', videos.length, 'videos,', text.length, 'text posts out of', embeds.length, 'embeds, limited to', args.limit ?? embeds.length, 'embeds')
 
     const chunkSize = 10
     for (let i = 0; i < text.length; i += chunkSize) {
@@ -89,7 +90,7 @@ async function handleChannel (id: string, args: Arguments): Promise<void> {
 
     if (videos.length) {
       const body = JSON.stringify({
-        content: videos.map((v, i) => `[Clip ${i + 1}](${v.embed.video?.url}) - [Jump](${v.source})`).join('\n')
+        content: videos.map((v, i) => `[Clip ${i + 1}](${v.embed.video?.url}) - [Jump](${v.source}) to <#${v.message.channel_id}>`).join('\n')
       }, undefined, 2)
 
       if (args['dry-run']) {

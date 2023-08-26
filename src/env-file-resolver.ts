@@ -20,8 +20,8 @@ export class EnvFileResolver extends Resolver {
     const lines = content.split('\n')
 
     for (const line of lines) {
-      const [key, value] = line.split(/\s*=\s*/)
-      out[key.toLowerCase()] = value
+      const [key, ...value] = line.split(/\s*=\s*/)
+      out[key.toLowerCase()] = value.join('=')
     }
 
     return out

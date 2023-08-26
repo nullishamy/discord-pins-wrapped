@@ -52,6 +52,7 @@ export interface FlaggedEmbed {
   embed: Embed
   source: string
   hasVideo: boolean
+  message: Message
 }
 
 export function makeMessageEmbeds (messages: Message[]): FlaggedEmbed[] {
@@ -64,7 +65,8 @@ export function makeMessageEmbeds (messages: Message[]): FlaggedEmbed[] {
           text: 'Sent at',
           proxy_url: undefined,
           url: undefined
-        }
+        },
+        color: 0x8468c9
       }
       let hasVideo = false
 
@@ -106,15 +108,16 @@ export function makeMessageEmbeds (messages: Message[]): FlaggedEmbed[] {
 
       if (embed.description) {
         embed.description += `
-        [Jump](${getMessageLink(p)})
+        [Jump](${getMessageLink(p)}) to <#${p.channel_id}>
         `
       } else {
-        embed.description = `[Jump](${getMessageLink(p)})`
+        embed.description = `[Jump](${getMessageLink(p)}) to <#${p.channel_id}>`
       }
 
       return {
         embed,
         hasVideo,
+        message: p,
         source: getMessageLink(p)
       }
     })
