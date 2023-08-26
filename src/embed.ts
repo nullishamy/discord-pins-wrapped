@@ -1,5 +1,5 @@
 import { Message } from './schema.js'
-import { getAvatarURL, getMessageLink } from './util.js'
+import { getAvatarURL, getMessageLink, ZWS } from './util.js'
 
 export interface UrlBased<TUrl = string, TProxy = string | undefined> {
   url: TUrl
@@ -121,4 +121,48 @@ export function makeMessageEmbeds (messages: Message[]): FlaggedEmbed[] {
         source: getMessageLink(p)
       }
     })
+}
+
+export function makeLeaderboardEmbed (messages: Message[], channelIds: string[]): Embed {
+  const scores: Record<string, number> = {}
+  for (const message of messages) {
+    let score = scores[message.author.username] ?? 0
+    score += 1
+    scores[message.author.username] = score
+  }
+
+  const scoreString = Object
+    .entries(scores)
+    .sort(([,a], [,b]) => b - a)
+    .map(([k, v]) => `\`@${ZWS}${k}\` - **${v}** pins`)
+    .join('\n')
+
+  return {
+    title: 'Leaderboard',
+    description: `Built from ${channelIds.length} channels (${channelIds.map(id => `<#${id}>`).join(', ')})
+
+    ${scoreString}`,
+    color: 0x8468c9
+  }
+}
+export function makeFirstPinsEmbeds (messages: Message[]): Record<string, FlaggedEmbed> {
+  const pins: Record<string, Message> = {}
+  for (const message of messages) {
+    const pin = pins[message.author.username]
+    if (!pin) {
+      pins[message.author.username] = message
+      continue
+    }
+    if (message.timestamp.getTime() < pin.timestamp.getTime()) {
+      pins[message.author.username] = pin
+    }
+  }
+
+  const embeds: Record<string, FlaggedEmbed> = {}
+  for (const [user, pin] of Object.entries(pins)) {
+    const embed = makeMessageEmbeds([pin])[0]
+    embeds[user] = embed
+  }
+
+  return embeds
 }

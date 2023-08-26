@@ -1,5 +1,7 @@
 import { Channel, Message } from './schema.js'
 
+export const ZWS = '​'
+
 export const sleep = async (time: number): Promise<void> => await new Promise((resolve) => setTimeout(resolve, time))
 
 export function getPinsForUser (channel: Channel, userId: string): Message[] {

@@ -2,11 +2,12 @@
 
 import { a, Args, ParserOpts, util } from 'args.ts'
 import { ExtractArgType } from 'args.ts/lib/internal/types'
-import fetch from 'node-fetch'
-import { makeMessageEmbeds, FlaggedEmbed } from './embed.js'
+import { makeMessageEmbeds, FlaggedEmbed, makeLeaderboardEmbed, makeFirstPinsEmbeds } from './embed.js'
 import { EnvFileResolver } from './env-file-resolver.js'
-import { fetchChannel } from './fetchers.js'
-import { getPinsForUser } from './util.js'
+import { fetchChannel, fetchPins } from './fetchers.js'
+import { Message } from './schema'
+import { getPinsForUser, ZWS } from './util.js'
+import { sendWebhook } from './webhook.js'
 
 const DEFAULT_CHANNELS = [
   '960951177212743680', // #general-archived-1
@@ -28,7 +29,10 @@ const parser = new Args(opts)
   .arg(['--token'], a.string())
   .arg(['--channels'], a.string().array().default(DEFAULT_CHANNELS))
   .arg(['--user'], a.string().optional())
+  .arg(['--user-count'], a.bool().dependsOn('--user'))
   .arg(['--limit'], a.number().optional())
+  .arg(['--leaderboard'], a.bool().conflictsWith('--user').conflictsWith('--user-count'))
+  .arg(['--first-pin'], a.bool().conflictsWith('--leaderboard'))
 
 export type Arguments = ExtractArgType<typeof parser>
 
@@ -42,9 +46,28 @@ async function handleChannel (id: string, args: Arguments): Promise<void> {
     if (args.user !== undefined) {
       console.log('Filtering pins by user', args.user)
 
-      filteredPins = getPinsForUser(channel, '637032376731566082')
+      filteredPins = getPinsForUser(channel, args.user)
     } else {
       console.log('Using all pins from channel')
+    }
+
+    if (args['user-count']) {
+      console.log('Sending only the count for this user, which is', filteredPins.length)
+      if (args['dry-run']) {
+        console.log('Halting here')
+        return
+      }
+
+      const username = filteredPins[0]?.author.username ?? 'unknown'
+      const webhookResult = await sendWebhook(args.webhook, [
+        {
+          description: `User \`@${ZWS}${username}\` (${args.user}) has ${filteredPins.length} pins`,
+          color: 0x8468c9
+        }
+      ])
+
+      console.log('count send:', webhookResult)
+      return
     }
 
     const embeds = makeMessageEmbeds(filteredPins)
@@ -66,46 +89,34 @@ async function handleChannel (id: string, args: Arguments): Promise<void> {
     for (let i = 0; i < text.length; i += chunkSize) {
       const chunk = text.slice(i, i + chunkSize)
 
-      const body = JSON.stringify({
-        embeds: chunk.map(t => t.embed)
-      }, undefined, 2)
+      const body = chunk.map(t => t.embed)
 
       if (args['dry-run']) {
         console.log('Would have sent body (text):', body)
         break
       }
 
-      const webhookResult = await fetch(args.webhook, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          embeds: chunk.map(t => t.embed)
-        })
-      }).then(async res => await res.text())
+      if (args['dry-run']) {
+        console.log('Would have sent body (clips):', body)
+        return
+      }
+
+      const webhookResult = await sendWebhook(args.webhook, body)
 
       console.log('text send:', webhookResult)
     }
 
     if (videos.length) {
-      const body = JSON.stringify({
-        content: videos.map((v, i) => `[Clip ${i + 1}](${v.embed.video?.url}) - [Jump](${v.source}) to <#${v.message.channel_id}>`).join('\n')
-      }, undefined, 2)
+      const body = videos
+        .map((v, i) => `[Clip ${i + 1}](${v.embed.video?.url}) - [Jump](${v.source}) to <#${v.message.channel_id}>`)
+        .join('\n')
 
       if (args['dry-run']) {
         console.log('Would have sent body (clips):', body)
         return
       }
 
-      const webhookResult = await fetch(args.webhook, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body
-      }).then(async res => await res.text())
-
+      const webhookResult = await sendWebhook(args.webhook, undefined, body)
       console.log('clip send:', webhookResult)
     }
 
@@ -129,6 +140,86 @@ async function main (): Promise<void> {
   const args = result.args
 
   console.log('Operating with', args.channels.length, 'channels:', args.channels)
+  const needsAllPins = args.leaderboard || args['first-pin']
+
+  const allPins: Message[] = []
+
+  if (needsAllPins) {
+    for (const channel of args.channels) {
+      const pins = await fetchPins(channel, args.token)
+      if (!pins.ok) {
+        console.error('Failed to fetch for', channel, ', skipping')
+        continue
+      }
+
+      allPins.push(...pins.val)
+    }
+  }
+
+  if (args.leaderboard) {
+    console.log('Ranking leaderboard from', allPins.length, 'total pins')
+    const leaderboard = makeLeaderboardEmbed(allPins, args.channels)
+
+    if (args['dry-run']) {
+      console.log('Would have sent body (leaderboard)', leaderboard)
+      return
+    }
+
+    const webhookResult = await sendWebhook(args.webhook, [leaderboard])
+    console.log('leaderboard send:', webhookResult)
+    return
+  }
+
+  if (args['first-pin']) {
+    console.log('Selecting first pins from', allPins.length, 'total pins')
+    const firstPins = makeFirstPinsEmbeds(allPins)
+
+    if (args['dry-run']) {
+      console.log('Would have sent body (first-pin)', firstPins)
+      return
+    }
+
+    const videos: Array<{ user: string, embed: FlaggedEmbed }> = []
+    const text: Array<{ user: string, embed: FlaggedEmbed }> = []
+
+    for (const [user, embed] of Object.entries(firstPins)) {
+      if (embed.hasVideo) {
+        videos.push({ user, embed })
+      } else {
+        text.push({ user, embed })
+      }
+    }
+
+    const textBody = text.map(t => ({
+      ...t.embed.embed,
+      title: 'First pin'
+    }))
+    const videoBody = videos
+      .map((v, i) => `[Clip ${i + 1}](${v.embed.embed.video?.url}) - [Jump](${v.embed.source}) to <#${v.embed.message.channel_id}>`)
+      .join('\n')
+
+    if (args['dry-run']) {
+      console.log('Would have sent body (text):', textBody)
+      console.log('Would have sent body (video):', videoBody)
+      return
+    }
+
+    const webhookResult = await sendWebhook(args.webhook, textBody)
+
+    console.log('text send:', webhookResult)
+
+    if (videos.length) {
+      const body = videos
+        .map((v, i) => `[First clip](${v.embed.embed.video?.url}) - [Jump](${v.embed.source}) to <#${v.embed.message.channel_id}>`)
+        .join('\n')
+
+      const webhookResult = await sendWebhook(args.webhook, undefined, body)
+      console.log('clip send:', webhookResult)
+    }
+
+    return
+  }
+
   for (const channel of args.channels) {
     await handleChannel(channel, args)
     console.log('-- -- --')
